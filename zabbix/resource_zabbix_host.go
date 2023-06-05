@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 
 	"github.com/claranet/go-zabbix-api"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
 // HostInterfaceTypes zabbix different interface type
@@ -15,6 +17,12 @@ var HostInterfaceTypes = map[string]zabbix.InterfaceType{
 	"snmp":  2,
 	"ipmi":  3,
 	"jmx":   4,
+}
+
+var TlsConnectionTypes = map[string]zabbix.TlsConnectionType{
+	"none":        1,
+	"psk":         2,
+	"certificate": 4,
 }
 
 var interfaceSchema *schema.Resource = &schema.Resource{
@@ -83,6 +91,35 @@ func resourceZabbixHost() *schema.Resource {
 				Type:     schema.TypeBool,
 				Default:  true,
 				Optional: true,
+			},
+			// Tls configurations
+			"tls_connect": &schema.Schema{
+				Type:         schema.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringInSlice([]string{"none", "psk", "certificate"}, false),
+			},
+			"tls_accept": &schema.Schema{
+				Type:         schema.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringInSlice([]string{"none", "psk", "certificate"}, false),
+			},
+			"tls_issuer": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"tls_subject": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"tls_psk_identity": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"tls_psk": &schema.Schema{
+				Type:     schema.TypeString,
+				Computed:  true,
+				Optional:  true,
+				Sensitive: true,
 			},
 			//any changes to interface will trigger recreate, zabbix api kinda doesn't
 			//work nicely, interface can get linked to various things and replacement
@@ -274,6 +311,45 @@ func createHostObj(d *schema.ResourceData, api *zabbix.API) (*zabbix.Host, error
 		Status: 0,
 	}
 
+	// Init tls configuration
+	tls_connect := d.Get("tls_connect").(string)
+	tls_accept := d.Get("tls_accept").(string)
+
+	if tls_connect != "" || tls_accept != "" {
+		if tls_connect != "" {
+			host.TlsConnect = TlsConnectionTypes[tls_connect]
+		}
+		if tls_accept != "" {
+			host.TlsAccept = TlsConnectionTypes[tls_accept]
+		}
+
+		if tls_connect == "psk" || tls_accept == "psk" {
+			tls_psk_identity := d.Get("tls_psk_identity").(string)
+			tls_psk := d.Get("tls_psk").(string)
+
+			if tls_psk_identity == "" {
+				return nil, errors.New("tls_psk_identity should be set if PSK encryption is definided")
+			}
+			host.TlsPskIdentity = tls_psk_identity
+			if tls_psk == "" {
+				host.TlsPsk = generatePsk(128)
+			} else {
+				host.TlsPsk = tls_psk
+			}
+		}
+
+		tls_issuer := d.Get("tls_issuer").(string)
+		tls_subject := d.Get("tls_subject").(string)
+
+		if tls_issuer != "" {
+			host.TlsIssuer = tls_issuer
+		}
+
+		if tls_subject != "" {
+			host.TlsSubject = tls_subject
+		}
+	}
+
 	//0 is monitored, 1 - unmonitored host
 	if !d.Get("monitored").(bool) {
 		host.Status = 1
@@ -305,6 +381,15 @@ func createHostObj(d *schema.ResourceData, api *zabbix.API) (*zabbix.Host, error
 	return &host, nil
 }
 
+func generatePsk(length int) string {
+	letters := []byte("123456789abcdefABCDEF")
+	r := make([]byte, length)
+	for i := range r {
+		r[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(r)
+}
+
 func resourceZabbixHostCreate(d *schema.ResourceData, meta interface{}) error {
 	api := meta.(*zabbix.API)
 
@@ -326,6 +411,9 @@ func resourceZabbixHostCreate(d *schema.ResourceData, meta interface{}) error {
 
 	d.Set("host_id", hosts[0].HostID)
 	d.SetId(hosts[0].HostID)
+	if host.TlsPsk != "" {
+		d.Set("tls_psk", host.TlsPsk)
+	}
 
 	return nil
 }
