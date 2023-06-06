@@ -3,7 +3,7 @@ module github.com/claranet/terraform-provider-zabbix
 go 1.18
 
 require (
-	github.com/claranet/go-zabbix-api v1.0.1
+	github.com/claranet/go-zabbix-api v1.0.2
 	github.com/hashicorp/go-version v1.6.0
 	github.com/hashicorp/terraform-plugin-sdk/v2 v2.24.1
 )
